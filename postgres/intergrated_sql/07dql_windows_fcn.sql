@@ -303,7 +303,6 @@ WITH revenue AS (
             dol.order_country,
             dp.product_name,
             dp.category_key
-        LIMIT 100
 ), ranking AS (
 SELECT 
     order_country,

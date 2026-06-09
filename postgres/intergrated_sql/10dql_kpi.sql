@@ -68,7 +68,7 @@ WITH monthly_shipping AS (
             ds.shipping_mode,
             sum(foi.days_for_shipping_real) AS tot_shipping_days,
             sum(foi.sales) AS revenue,
-            count(foi.order_id) AS total_orders,
+            count(DISTINCT foi.order_id) AS total_orders,
             sum(CASE WHEN foi.delivery_status = 'Late delivery' THEN 1 ELSE 0 END) AS late_delivery_count,
             row_number() OVER(PARTITION BY dol.market,dd.year,dd.month ORDER BY sum(foi.sales)DESC) AS ranking
         FROM core.fact_order_item AS foi
@@ -142,7 +142,7 @@ WITH customer_revenues AS (
             dc.customer_segment,
             dd.month_name,
             foi.customer_key
-        ORDER BY foi.customer_key DESC
+
 )
 SELECT
     year,
