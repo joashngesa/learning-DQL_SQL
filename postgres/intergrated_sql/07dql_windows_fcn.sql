@@ -9,28 +9,22 @@ WITH revenues AS (
         SELECT
             dol.order_country as market,
             dp.product_name,
-            sum(sales) as total_revenue
+            sum(sales) as total_revenue,
+            rank() OVER(PARTITION BY dol.order_country ORDER BY SUM(sales) DESC) AS ranking
         FROM core.fact_order_item as foi
         JOIN core.dim_order_location as dol
         ON foi.order_location_key = dol.order_location_key
         JOIN core.dim_product as dp
         ON foi.product_key = dp.product_key
         GROUP BY dol.order_country,dp.product_name
-), product_rank AS (
+)
         SELECT
             market,
             product_name,
             total_revenue,
-            rank() OVER (PARTITION BY market ORDER BY total_revenue DESC) as ranking
+            ranking
         FROM revenues
-)
-SELECT
-    market,
-    product_name,
-    total_revenue,
-    ranking
-FROM product_rank
-WHERE ranking <= 5;
+        WHERE ranking <= 5;
 
 
 
@@ -49,30 +43,22 @@ WITH customer_revenue AS (
             dc.customer_segment,
             dc.customer_fname,
             dc.customer_lname,
-            SUM(foi.sales) AS total_revenues
+            SUM(foi.sales) AS total_revenues,
+            row_number() OVER(PARTITION BY dc.customer_segment ORDER BY SUM(foi.sales) DESC) AS customer_rank
         FROM core.fact_order_item as foi
         JOIN core.dim_customer as dc
         ON foi.customer_key = dc.customer_key
         GROUP BY foi.customer_key,dc.customer_segment,dc.customer_fname,dc.customer_lname
-), ranks AS (
+)
         SELECT
             customer_key,
             customer_segment,
             customer_fname,
             customer_lname,
             total_revenues,
-            row_number() OVER(PARTITION BY customer_key ORDER BY total_revenues) as customer_rank
+            customer_rank
         FROM customer_revenue
-)
-SELECT 
-    customer_key,
-    customer_segment,
-    customer_fname,
-    customer_lname,
-    total_revenues,
-    customer_rank
-FROM ranks
-WHERE customer_rank <= 3;
+        WHERE customer_rank <= 3;
 
 
 
@@ -88,28 +74,23 @@ WITH revenue AS (
         SELECT
             dol.order_country,
             ds.shipping_mode,
-            SUM(foi.sales) as total_revenues
+            SUM(foi.sales) as total_revenues,
+            row_number() OVER(PARTITION BY shipping_mode ORDER BY SUM(foi.sales)) as revenue_ranks
         FROM core.fact_order_item as foi
         JOIN core.dim_order_location as dol
         ON foi.order_location_key = dol.order_location_key
         JOIN core.dim_shipment as ds
         ON foi.shipment_key = ds.shipment_key
         GROUP BY ds.shipping_mode,dol.order_country
-), ranks AS (
+)
         SELECT 
             order_country,
             shipping_mode,
             total_revenues,
-            row_number() OVER(PARTITION BY shipping_mode ORDER BY total_revenues) as revenue_ranks
+            revenue_ranks
         FROM revenue
-)
-SELECT
-    order_country,
-    shipping_mode,
-    total_revenues,
-    revenue_ranks
-FROM ranks
-WHERE revenue_ranks <= 3;
+        WHERE revenue_ranks <= 3; 
+
 
 
 
@@ -124,46 +105,24 @@ WHERE revenue_ranks <= 3;
     --monthly_revenue
     --running_market_revenue
 
-
-with revenues AS (
-        SELECT 
-            dol.order_country,
-            dd.year as sales_year,
-            dd.full_date as sales_date,
-            dd.month_name,
-            SUM(foi.sales) as tot_revenue
-        FROM core.fact_order_item as foi
-        JOIN core.dim_order_location as dol
-        ON foi.order_location_key = dol.order_location_key
-        JOIN core.dim_date as dd
-        ON foi.order_date_key = dd.date_key
-        GROUP BY
-            dd.full_date,
-            dd.year,
-            dd.month_name,
-            dol.order_country
-),ranks AS (
-        SELECT
-            order_country,
-            sales_year,
-            sales_date,
-            month_name,
-            tot_revenue,
-            SUM(tot_revenue) OVER (PARTITION BY order_country) as sum_total
-        FROM revenues
-)
-SELECT
-    order_country,
-    sales_year,
-    sales_date,
-    month_name,
-    tot_revenue,
-    sum_total
-FROM ranks
-ORDER BY
-    sales_date,
-    sales_year,
-    month_name
+SELECT 
+    dol.order_country,
+    dd.year as sales_year,
+    dd.month,
+    dd.month_name,
+    SUM(foi.sales) as monthly_revenue,
+    sum(sum(foi.sales)) OVER(PARTITION BY dol.order_country ORDER BY dd.year, dd.month) AS running_market_revenue
+FROM core.fact_order_item as foi
+JOIN core.dim_order_location as dol
+ON foi.order_location_key = dol.order_location_key
+JOIN core.dim_date as dd
+ON foi.order_date_key = dd.date_key
+GROUP BY
+    dd.year,
+    dd.month,
+    dd.month_name,
+    dol.order_country
+        
 
 
 
@@ -180,10 +139,11 @@ ORDER BY
 
 WITH revenues AS (
         SELECT 
-            dol.order_country,
+            dol.order_country AS market,
             dd.year as sales_year,
-            dd.month as sales_month,
-            sum(foi.sales) as revenue
+            dd.month as month,
+            dd.month_name,
+            sum(foi.sales) as monthly_revenue
         FROM core.fact_order_item as foi
         JOIN core.dim_order_location as dol
         ON foi.order_location_key = dol.order_location_key
@@ -192,26 +152,33 @@ WITH revenues AS (
         GROUP BY 
             dd.year,
             dd.month,
+            dd.month_name,
             dol.order_country
-), comparisons AS (
+), revenue_difference AS (
         SELECT
-            order_country,
+            market,
             sales_year,
-            sales_month,
-            revenue,
-            lag(revenue) OVER (PARTITION BY sales_month) as previous_month_revenue
+            month,
+            month_name,
+            monthly_revenue,
+            lag(monthly_revenue) OVER (PARTITION BY market ORDER BY sales_year,month) as previous_month_revenue,
+            (monthly_revenue - lag(monthly_revenue) OVER (PARTITION BY market ORDER BY sales_year,month)) AS revenue_difference
         FROM revenues
 )
 SELECT
-    order_country,
+    market,
     sales_year,
-    sales_month,
-    revenue,
+    month,
+    month_name,
+    monthly_revenue,
     previous_month_revenue,
-    (revenue - previous_month_revenue) as revenue_difference
-FROM comparisons
-LIMIT 70;
-
+    revenue_difference,
+    CASE
+        WHEN previous_month_revenue is NULL or previous_month_revenue = 0 THEN NULL
+        ELSE
+        ROUND((revenue_difference::NUMERIC / previous_month_revenue) * 100,2)
+        END AS mom_growth_percentage
+FROM revenue_difference
 
 
 
@@ -265,11 +232,41 @@ SELECT
     FROM dashboard
     ;
 
+--you can also write the query as below:
 
+WITH revenues AS (
+    SELECT
+        ds.shipping_mode,
+        SUM(foi.order_item_quantity) AS total_order_items,
+        ROUND(AVG(foi.days_for_shipping_real), 2) AS avg_shipping_days,
+        SUM(foi.sales) AS total_revenue,
+        -- FIX: Proper Boolean syntax (handles TRUE/FALSE types cleanly)
+        COUNT(*) FILTER (WHERE foi.late_delivery_risk IS TRUE) AS late_delivery_count,
+        COUNT(*) AS total_count
+    FROM core.fact_order_item AS foi
+    JOIN core.dim_shipment AS ds
+    ON foi.shipment_key = ds.shipment_key
+    GROUP BY ds.shipping_mode
+)
+SELECT
+    shipping_mode,
+    total_order_items,
+    avg_shipping_days,
+    total_revenue,
+    late_delivery_count,
+    -- FIX: Combined the redundant CTE math directly into the final select
+    ROUND((late_delivery_count::NUMERIC / total_count), 2) AS late_delivery_rate,
+    CASE
+        WHEN avg_shipping_days > 4 OR (late_delivery_count::NUMERIC / total_count) > 0.30
+        THEN 'Risky'
+        ELSE 'Safe'
+    END AS risk_flag
+FROM revenues;
 
 
 
 --MARKET-PRODUCT LEADERBOARD
+--Top 5 highest revenue pe product for each country per year
 --Requirements; Revenues per;
         --market
         --year
@@ -284,13 +281,14 @@ SELECT
         --total_revenue
         --product_rank
 
-WITH revenue AS (
+WITH product_revenue AS (
         SELECT
-            dol.order_country,
+            dol.order_country as market,
             dd.year,
             dp.product_name,
             dp.category_key,
-            sum(foi.sales) as total_revenue
+            sum(foi.sales) as total_revenue,
+            row_number() OVER(PARTITION BY dol.order_country,dd.year ORDER BY sum(foi.sales) DESC) AS product_ranking
         FROM core.fact_order_item as foi
         JOIN core.dim_order_location as dol
         ON foi.order_location_key = dol.order_location_key
@@ -303,25 +301,21 @@ WITH revenue AS (
             dol.order_country,
             dp.product_name,
             dp.category_key
-), ranking AS (
-SELECT 
-    order_country,
-    year,
-    product_name,
-    category_key,
-    total_revenue,
-    row_number() OVER (PARTITION BY order_country,year) as ranks
-FROM revenue
 )
 SELECT
-    order_country,
+    market,
     year,
     product_name,
     category_key,
     total_revenue,
-    ranks
-FROM ranking
-WHERE ranks <= 5;
+    product_ranking
+FROM product_revenue
+WHERE product_ranking <= 5
+ORDER BY 
+    market,
+    year,
+    product_ranking
+    ;
 
 
 
